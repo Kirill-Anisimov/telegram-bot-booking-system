@@ -12,6 +12,7 @@ Base.metadata.create_all(bind=engine)
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
+
 # --- Вспомогательные функции ---
 
 def get_free_slots(date, room):
@@ -22,6 +23,7 @@ def get_free_slots(date, room):
     taken = {s.time for s in slots if s.is_booked}
     all_slots = [f"{h:02d}:00" for h in WORK_HOURS]
     return [t for t in all_slots if t not in taken]
+
 
 def book_slot(user_id, date, time, room):
     session = SessionLocal()
@@ -45,6 +47,7 @@ def book_slot(user_id, date, time, room):
     session.close()
     return True, f"✅ Вы успешно забронировали {time} ({room.value}) на {date.strftime('%d.%m.%Y')}"
 
+
 def get_user_bookings(user_id):
     session = SessionLocal()
     user = session.query(User).filter_by(telegram_id=user_id).first()
@@ -58,6 +61,7 @@ def get_user_bookings(user_id):
     )
     session.close()
     return bookings
+
 
 def cancel_booking(user_id, slot_id):
     session = SessionLocal()
@@ -86,9 +90,13 @@ async def start(message: types.Message):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Забронировать", callback_data="book")],
-        [InlineKeyboardButton(text="📋 Мои брони", callback_data="my_bookings")]
+        [InlineKeyboardButton(text="📋 Мои брони", callback_data="show_my_bookings")],
+        [InlineKeyboardButton(text="❌ Отменить бронь", callback_data="cancel_menu")]
     ])
-    await message.answer("🎵 Добро пожаловать в школу музыки!\nВыберите действие:", reply_markup=kb)
+    await message.answer(
+        text="🎵 Добро пожаловать в школу музыки!\nВыберите действие:",
+        reply_markup=kb,
+    )
 
 
 # --- 1️⃣ Выбор комнаты ---
@@ -139,7 +147,8 @@ async def choose_time(callback: types.CallbackQuery):
     for t in free_slots:
         kb.button(text=t, callback_data=f"time_{room_value}_{date}_{t}")
     kb.adjust(3)
-    await callback.message.edit_text(f"Свободные слоты ({room_value}) на {date.strftime('%d.%m.%Y')}:", reply_markup=kb.as_markup())
+    await callback.message.edit_text(f"Свободные слоты ({room_value}) на {date.strftime('%d.%m.%Y')}:",
+                                     reply_markup=kb.as_markup())
 
 
 # --- 4️⃣ Подтверждение брони ---
@@ -154,27 +163,43 @@ async def confirm_booking(callback: types.CallbackQuery):
 
 
 # --- 5️⃣ Просмотр своих броней ---
-@dp.callback_query(F.data == "my_bookings")
-async def my_bookings(callback: types.CallbackQuery):
+@dp.callback_query(F.data == "show_my_bookings")
+async def show_my_bookings(callback: types.CallbackQuery):
     bookings = get_user_bookings(callback.from_user.id)
 
     if not bookings:
         await callback.message.edit_text("У вас нет активных броней 🎶")
         return
 
+    text = "📋 Ваши брони:\n" + "\n".join(
+        [f"• {b.room.value} | {b.date.strftime('%d.%m.%Y')} {b.time}" for b in bookings]
+    )
+    await callback.message.edit_text(text)
+
+
+# --- 6️⃣ Меню отмены брони ---
+@dp.callback_query(F.data == "cancel_menu")
+async def cancel_menu(callback: types.CallbackQuery):
+    bookings = get_user_bookings(callback.from_user.id)
+
+    if not bookings:
+        await callback.message.edit_text("У вас нет активных броней для отмены 🎶")
+        return
+
     kb = InlineKeyboardBuilder()
     for b in bookings:
         label = f"{b.room.value} | {b.date.strftime('%d.%m.%Y')} {b.time}"
         kb.button(text=f"❌ Отменить {label}", callback_data=f"cancel_{b.id}")
+    kb.button(text="◀️ Назад", callback_data="back_to_menu")
     kb.adjust(1)
 
-    text = "📋 Ваши брони:\n" + "\n".join(
-        [f"• {b.room.value} | {b.date.strftime('%d.%m.%Y')} {b.time}" for b in bookings]
+    await callback.message.edit_text(
+        "Выберите бронь, которую хотите отменить:",
+        reply_markup=kb.as_markup()
     )
-    await callback.message.edit_text(text, reply_markup=kb.as_markup())
 
 
-# --- 6️⃣ Отмена брони ---
+# --- 7️⃣ Отмена брони ---
 @dp.callback_query(F.data.startswith("cancel_"))
 async def cancel(callback: types.CallbackQuery):
     slot_id = int(callback.data.split("_")[1])
@@ -182,10 +207,17 @@ async def cancel(callback: types.CallbackQuery):
     await callback.message.edit_text(msg)
 
 
+# --- 8️⃣ Возврат в меню start ---
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: types.CallbackQuery):
+    await start(callback.message)
+
+
 # --- Запуск ---
 async def main():
     print("Бот запущен 🚀")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
